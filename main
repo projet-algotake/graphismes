@@ -15,3 +15,706 @@ void graphismes_afficher_compte_rebours(int valeur);
 void graphismes_afficher_jeu(const t_jeu *jeu);
 
 #endif
+graphismes.c 
+#include "graphismes.h"
+
+#include "moteur.h"
+
+#include <allegro.h>
+#include <stdio.h>
+#include <string.h>
+
+#define IMAGE_JOUEUR "joueur"
+#define IMAGE_PERSO_DOS "persodos"
+#define IMAGE_PERSO_FACE "persoface"
+#define IMAGE_BULLE "bulle"
+#define IMAGE_BONUS "bonus"
+#define IMAGE_BONUS2 "bonus2"
+#define IMAGE_FOND "fond"
+#define IMAGE_BOSS "boss"
+#define IMAGE_TIR "animationtir"
+#define IMAGE_ACCUEIL "ecran d'accueil"
+#define IMAGE_COMPTE_REBOURS "imgcomptearebours"
+#define IMAGE_VICTOIRE "imgvictoire"
+#define IMAGE_DEFAITE "imgechouway"
+#define TEXTE_EQUIPE "Linka Mazarin   Antoine Benedetti   Lou Gohore   Ryme Nhaily"
+
+BITMAP *page = NULL;
+BITMAP *image_joueur = NULL;
+BITMAP *image_perso_dos = NULL;
+BITMAP *image_perso_face = NULL;
+BITMAP *image_bulle = NULL;
+BITMAP *image_bonus = NULL;
+BITMAP *image_bonus2 = NULL;
+BITMAP *image_fond = NULL;
+BITMAP *image_boss = NULL;
+BITMAP *image_accueil = NULL;
+BITMAP *image_compte_rebours = NULL;
+BITMAP *image_victoire = NULL;
+BITMAP *image_defaite = NULL;
+BITMAP *images_tir[4] = {NULL};
+BITMAP *images_bulle[NB_NIVEAUX + 1] = {NULL};
+BITMAP *images_fond[NB_NIVEAUX + 1] = {NULL};
+
+static int limiter(int valeur, int min, int max) {
+    if (valeur < min) return min;
+    if (valeur > max) return max;
+    return valeur;
+}
+
+static int est_rose_transparent(int couleur) {
+    return getr(couleur) > 245 && getg(couleur) < 10 && getb(couleur) > 245;
+}
+
+static BITMAP *recadrer_bitmap(BITMAP *image) {
+    int x;
+    int y;
+    int min_x;
+    int min_y;
+    int max_x;
+    int max_y;
+    BITMAP *recadre;
+
+    if (image == NULL) return NULL;
+
+    min_x = image->w;
+    min_y = image->h;
+    max_x = -1;
+    max_y = -1;
+
+    for (y = 0; y < image->h; y++) {
+        for (x = 0; x < image->w; x++) {
+            if (!est_rose_transparent(getpixel(image, x, y))) {
+                if (x < min_x) min_x = x;
+                if (x > max_x) max_x = x;
+                if (y < min_y) min_y = y;
+                if (y > max_y) max_y = y;
+            }
+        }
+    }
+
+    if (max_x < min_x || max_y < min_y) return image;
+    if (min_x == 0 && min_y == 0 && max_x == image->w - 1 && max_y == image->h - 1) return image;
+
+    recadre = create_bitmap(max_x - min_x + 1, max_y - min_y + 1);
+    if (recadre == NULL) return image;
+
+    clear_to_color(recadre, makecol(255, 0, 255));
+    blit(image, recadre, min_x, min_y, 0, 0, recadre->w, recadre->h);
+    destroy_bitmap(image);
+    return recadre;
+}
+
+static BITMAP *charger_bitmap_nom(const char *nom) {
+    char chemin_normal[128];
+    char chemin_build[132];
+    BITMAP *image;
+
+    snprintf(chemin_normal, sizeof(chemin_normal), "assets/%s.bmp", nom);
+    snprintf(chemin_build, sizeof(chemin_build), "../assets/%s.bmp", nom);
+
+    image = load_bitmap(chemin_normal, NULL);
+    if (image == NULL) {
+        image = load_bitmap(chemin_build, NULL);
+    }
+    return recadrer_bitmap(image);
+}
+
+static BITMAP *charger_bitmap_niveau(const char *prefixe, int niveau) {
+    char nom[40];
+    snprintf(nom, sizeof(nom), "%s%d", prefixe, niveau);
+    return charger_bitmap_nom(nom);
+}
+
+static void charger_images(void) {
+    int i;
+
+    image_joueur = charger_bitmap_nom(IMAGE_JOUEUR);
+    image_perso_dos = charger_bitmap_nom(IMAGE_PERSO_DOS);
+    image_perso_face = charger_bitmap_nom(IMAGE_PERSO_FACE);
+    image_bulle = charger_bitmap_nom(IMAGE_BULLE);
+    image_bonus = charger_bitmap_nom(IMAGE_BONUS);
+    image_bonus2 = charger_bitmap_nom(IMAGE_BONUS2);
+    image_fond = charger_bitmap_nom(IMAGE_FOND);
+    image_boss = charger_bitmap_nom(IMAGE_BOSS);
+    image_accueil = charger_bitmap_nom(IMAGE_ACCUEIL);
+    image_compte_rebours = charger_bitmap_nom(IMAGE_COMPTE_REBOURS);
+    image_victoire = charger_bitmap_nom(IMAGE_VICTOIRE);
+    image_defaite = charger_bitmap_nom(IMAGE_DEFAITE);
+
+    for (i = 1; i <= 3; i++) {
+        images_tir[i] = charger_bitmap_niveau(IMAGE_TIR, i);
+    }
+
+    for (i = 1; i <= NB_NIVEAUX; i++) {
+        images_bulle[i] = charger_bitmap_niveau(IMAGE_BULLE, i);
+        images_fond[i] = charger_bitmap_niveau(IMAGE_FOND, i);
+    }
+}
+
+static void detruire_image(BITMAP **image) {
+    if (*image != NULL) {
+        destroy_bitmap(*image);
+        *image = NULL;
+    }
+}
+
+static void dessiner_sprite(BITMAP *image, int x, int y, int largeur, int hauteur) {
+    int larg2;
+    int haut2;
+    int x2;
+    int y2;
+    float r_img;
+    float r_case;
+
+    if (image == NULL || largeur <= 0 || hauteur <= 0 || image->w <= 0 || image->h <= 0) return;
+
+    larg2 = largeur;
+    haut2 = hauteur;
+    r_img = (float)image->w / (float)image->h;
+    r_case = (float)largeur / (float)hauteur;
+
+    if (r_img > r_case) {
+        haut2 = (int)(largeur / r_img);
+        if (haut2 < 1) haut2 = 1;
+    } else {
+        larg2 = (int)(hauteur * r_img);
+        if (larg2 < 1) larg2 = 1;
+    }
+
+    x2 = x + (largeur - larg2) / 2;
+    y2 = y + (hauteur - haut2) / 2;
+    stretch_sprite(page, image, x2, y2, larg2, haut2);
+}
+
+static void dessiner_sprite_tourne(BITMAP *image, int x, int y, int largeur, int hauteur, int angle) {
+    float echelle;
+    int centre_x;
+    int centre_y;
+    int larg_img;
+    int haut_img;
+
+    if (image == NULL || largeur <= 0 || hauteur <= 0 || image->w <= 0 || image->h <= 0) return;
+
+    echelle = (float)largeur / (float)image->h;
+    if ((float)hauteur / (float)image->w < echelle) {
+        echelle = (float)hauteur / (float)image->w;
+    }
+
+    larg_img = (int)(image->w * echelle);
+    haut_img = (int)(image->h * echelle);
+    centre_x = x + largeur / 2;
+    centre_y = y + hauteur / 2;
+
+    rotate_scaled_sprite(page, image,
+                         centre_x - larg_img / 2,
+                         centre_y - haut_img / 2,
+                         itofix(angle), ftofix(echelle));
+}
+
+static BITMAP *image_du_niveau(BITMAP *images[], BITMAP *image_generique, int niveau) {
+    if (niveau >= 1 && niveau <= NB_NIVEAUX && images[niveau] != NULL) {
+        return images[niveau];
+    }
+    return image_generique;
+}
+
+static void dessiner_image_plein_ecran(BITMAP *image) {
+    if (image != NULL) {
+        stretch_blit(image, page, 0, 0, image->w, image->h, 0, 0, SCREEN_W, SCREEN_H);
+    } else {
+        clear_to_color(page, makecol(10, 20, 40));
+    }
+}
+
+static void dessiner_signature_equipe(void) {
+    textout_centre_ex(page, font, TEXTE_EQUIPE, SCREEN_W / 2 + 1, SCREEN_H - 21, makecol(0, 0, 0), -1);
+    textout_centre_ex(page, font, TEXTE_EQUIPE, SCREEN_W / 2, SCREEN_H - 22, makecol(255, 235, 0), -1);
+}
+
+static void dessiner_texte_grand(const char *texte, int centre_x, int y, int couleur, int facteur) {
+    int largeur;
+    int hauteur;
+    int w2;
+    int h2;
+    BITMAP *source;
+
+    if (texte == NULL) return;
+
+    largeur = text_length(font, texte) + 8;
+    hauteur = text_height(font) + 8;
+    source = create_bitmap(largeur, hauteur);
+    if (source == NULL) return;
+
+    clear_to_color(source, makecol(255, 0, 255));
+    textout_centre_ex(source, font, texte, largeur / 2, 4, couleur, -1);
+
+    w2 = largeur * facteur;
+    h2 = hauteur * facteur;
+    stretch_sprite(page, source, centre_x - w2 / 2, y, w2, h2);
+    destroy_bitmap(source);
+}
+
+static void dessiner_fond(const t_jeu *jeu) {
+    int y;
+    int i;
+    int x;
+    BITMAP *fond = image_du_niveau(images_fond, image_fond, jeu->niveau);
+
+    if (fond != NULL) {
+        stretch_blit(fond, page, 0, 0, fond->w, fond->h,
+                     0, 0, SCREEN_W, jeu->sol_jeu);
+        return;
+    }
+
+    for (y = 0; y < jeu->sol_jeu; y++) {
+        int r = 8 + y * 18 / jeu->sol_jeu;
+        int g = 16 + y * 34 / jeu->sol_jeu;
+        int b = 42 + y * 58 / jeu->sol_jeu;
+        hline(page, 0, y, SCREEN_W, makecol(r, g, b));
+    }
+
+    for (i = 0; i < 45; i++) {
+        x = (i * 137 + 43) % SCREEN_W;
+        y = 25 + ((i * 71) % (jeu->sol_jeu - 180));
+        putpixel(page, x, y, makecol(210, 210, 255));
+    }
+
+    for (x = 0; x < SCREEN_W; x += SCREEN_W / 6) {
+        triangle(page, x - 60, jeu->sol_jeu, x + 70, jeu->sol_jeu - 175,
+                 x + 210, jeu->sol_jeu, makecol(26, 48, 78));
+        triangle(page, x + 15, jeu->sol_jeu, x + 105, jeu->sol_jeu - 115,
+                 x + 230, jeu->sol_jeu, makecol(34, 66, 94));
+    }
+}
+
+static void dessiner_sol(const t_jeu *jeu) {
+    int x;
+    rectfill(page, 0, jeu->sol_jeu, SCREEN_W, jeu->sol_info, makecol(0, 0, 0));
+    rectfill(page, 0, jeu->sol_jeu, SCREEN_W, jeu->sol_jeu + 6, makecol(20, 20, 20));
+    for (x = 0; x < SCREEN_W; x += 36) {
+        line(page, x, jeu->sol_jeu + 4, x + 18, jeu->sol_info - 4, makecol(45, 45, 45));
+    }
+    line(page, 0, jeu->sol_jeu, SCREEN_W, jeu->sol_jeu, makecol(255, 255, 255));
+}
+
+static void dessiner_joueur(const t_jeu *jeu) {
+    int couleur = (jeu->joueur.bonus_tir > 0) ? makecol(0, 255, 255) : makecol(0, 150, 255);
+    BITMAP *joueur = (jeu->joueur.pose_tir > 0) ? image_perso_dos : image_perso_face;
+    if (joueur == NULL) joueur = image_joueur;
+
+    if (joueur != NULL) {
+        dessiner_sprite(joueur, (int)jeu->joueur.x, (int)jeu->joueur.y, jeu->joueur.largeur, jeu->joueur.hauteur);
+    } else {
+        rectfill(page, (int)jeu->joueur.x, (int)jeu->joueur.y,
+                 (int)jeu->joueur.x + jeu->joueur.largeur,
+                 (int)jeu->joueur.y + jeu->joueur.hauteur, couleur);
+        rect(page, (int)jeu->joueur.x, (int)jeu->joueur.y,
+             (int)jeu->joueur.x + jeu->joueur.largeur,
+             (int)jeu->joueur.y + jeu->joueur.hauteur, makecol(255, 255, 255));
+    }
+}
+
+static void dessiner_blocs(const t_jeu *jeu) {
+    const t_bloc *bloc = jeu->blocs;
+    while (bloc != NULL) {
+        int couleur = makecol(0, 0, 0);
+        int contour = makecol(245, 245, 245);
+        if (bloc->contenu == CONTENU_BONUS_TIR) contour = makecol(255, 230, 80);
+        if (bloc->contenu == CONTENU_BONUS_RALENTI) contour = makecol(80, 220, 255);
+        if (bloc->contenu == CONTENU_BULLE_CACHEE) contour = makecol(255, 120, 190);
+        if (!bloc->destructible) contour = makecol(170, 180, 210);
+
+        rectfill(page, (int)bloc->x, (int)bloc->y, (int)bloc->x + bloc->largeur,
+                 (int)bloc->y + bloc->hauteur, couleur);
+        rect(page, (int)bloc->x, (int)bloc->y, (int)bloc->x + bloc->largeur,
+             (int)bloc->y + bloc->hauteur, contour);
+        bloc = bloc->suivant;
+    }
+}
+
+static void dessiner_bulles(const t_jeu *jeu) {
+    const t_bulle *bulle = jeu->bulles;
+    BITMAP *bulle_image = image_du_niveau(images_bulle, image_bulle, jeu->niveau);
+
+    while (bulle != NULL) {
+        int x = (int)bulle->x;
+        int y = (int)bulle->y;
+        int r = bulle->rayon;
+        int couleur = bulle->est_boss ? makecol(130, 40, 200) : makecol(220, 20 + bulle->taille * 25, 75);
+
+        if (bulle->est_boss && image_boss != NULL) {
+            dessiner_sprite(image_boss, x - r, y - r, r * 2, r * 2);
+        } else if (bulle_image != NULL && !bulle->est_boss) {
+            dessiner_sprite(bulle_image, x - r, y - r, r * 2, r * 2);
+        } else {
+            circlefill(page, x, y, r, couleur);
+            circlefill(page, x - r / 3, y - r / 3, r / 4, makecol(255, 180, 180));
+        }
+
+        if (bulle->est_boss) {
+            textprintf_centre_ex(page, font, x, y - 4, makecol(255, 255, 255), -1, "BOSS %d", bulle->vies);
+        } else {
+            textprintf_centre_ex(page, font, x, y - 4, makecol(255, 255, 255), -1, "%d", bulle->taille);
+        }
+        bulle = bulle->suivant;
+    }
+}
+
+static void dessiner_boss_eclair(const t_jeu *jeu) {
+    int x;
+    int y;
+    int w;
+    int h;
+    int couleur;
+
+    if (!jeu->boss_eclair.actif) return;
+
+    x = (int)jeu->boss_eclair.x;
+    y = (int)jeu->boss_eclair.y;
+    w = jeu->boss_eclair.largeur;
+    h = jeu->boss_eclair.hauteur;
+    couleur = (jeu->bonus_ralenti > 0) ? makecol(70, 180, 255) : makecol(135, 45, 185);
+
+    if (image_boss != NULL) {
+        dessiner_sprite(image_boss, x, y, w, h);
+    } else {
+        ellipsefill(page, x + w / 2, y + h / 2, w / 2, h / 2, couleur);
+        ellipse(page, x + w / 2, y + h / 2, w / 2, h / 2, makecol(255, 255, 255));
+        rectfill(page, x + w / 4, y + h / 4, x + 3 * w / 4, y + h / 2, makecol(35, 25, 70));
+        textout_centre_ex(page, font, "BOSS", x + w / 2, y + h / 2 - 4, makecol(255, 255, 255), -1);
+    }
+    line(page, x + w / 2, y + h, x + w / 2, y + h + 14, makecol(70, 255, 90));
+}
+
+static void dessiner_tirs(const t_jeu *jeu) {
+    const t_tir *tir = jeu->tirs;
+    while (tir != NULL) {
+        BITMAP *image_tir = NULL;
+        int type = tir->type;
+        int x = (int)(tir->x - tir->largeur / 2.0f);
+        int y = (int)(tir->y - tir->hauteur);
+
+        if (type < 1 || type > 3) type = 1;
+        image_tir = images_tir[type];
+
+        if (image_tir != NULL) {
+            if (image_tir->w > image_tir->h) {
+                dessiner_sprite_tourne(image_tir, x, y, tir->largeur, tir->hauteur, 192);
+            } else {
+                dessiner_sprite(image_tir, x, y, tir->largeur, tir->hauteur);
+            }
+        } else {
+            int couleur = (type == 1) ? makecol(255, 255, 0) : ((type == 2) ? makecol(0, 220, 255) : makecol(255, 120, 60));
+            rectfill(page, x, y, x + tir->largeur, y + tir->hauteur, couleur);
+            rect(page, x, y, x + tir->largeur, y + tir->hauteur, makecol(255, 255, 255));
+        }
+        tir = tir->suivant;
+    }
+}
+
+static void dessiner_bonus(const t_jeu *jeu) {
+    const t_bonus *bonus = jeu->bonus;
+    while (bonus != NULL) {
+        int cx = (int)bonus->x + bonus->largeur / 2;
+        int cy = (int)bonus->y + bonus->hauteur / 2;
+        int couleur = (bonus->type == CONTENU_BONUS_RALENTI) ? makecol(40, 190, 255) : makecol(0, 255, 0);
+        const char *lettre = (bonus->type == CONTENU_BONUS_RALENTI) ? "R" : "S";
+        BITMAP *image = (bonus->type == CONTENU_BONUS_RALENTI) ? image_bonus : image_bonus2;
+
+        if (image != NULL) {
+            dessiner_sprite(image, (int)bonus->x, (int)bonus->y, bonus->largeur, bonus->hauteur);
+        } else {
+            circlefill(page, cx, cy, bonus->largeur / 2, couleur);
+            circle(page, cx, cy, bonus->largeur / 2, makecol(255, 255, 255));
+            textout_centre_ex(page, font, lettre, cx, cy - 4, makecol(0, 0, 0), -1);
+        }
+        bonus = bonus->suivant;
+    }
+}
+
+static void dessiner_eclair_irregulier(int x, int y, int largeur, int hauteur) {
+    int cx = x + largeur / 2;
+    int marge = largeur / 3;
+    int points[12];
+    int i;
+
+    points[0] = cx - marge / 2;
+    points[1] = y;
+    points[2] = cx + marge;
+    points[3] = y + hauteur / 4;
+    points[4] = cx + largeur / 10;
+    points[5] = y + hauteur / 4;
+    points[6] = cx + marge / 2;
+    points[7] = y + hauteur;
+    points[8] = cx - marge;
+    points[9] = y + hauteur / 2;
+    points[10] = cx - largeur / 12;
+    points[11] = y + hauteur / 2;
+
+    polygon(page, 6, points, makecol(255, 235, 20));
+    for (i = 0; i < 6; i++) {
+        int j = (i + 1) % 6;
+        line(page, points[i * 2], points[i * 2 + 1],
+             points[j * 2], points[j * 2 + 1], makecol(255, 255, 170));
+    }
+    line(page, cx - marge, y, cx + marge, y + hauteur, makecol(255, 255, 80));
+}
+
+static void dessiner_eclairs(const t_jeu *jeu) {
+    const t_eclair *eclair = jeu->eclairs;
+    while (eclair != NULL) {
+        int x = (int)eclair->x;
+        int y = (int)eclair->y;
+        dessiner_eclair_irregulier(x, y, eclair->largeur, eclair->hauteur);
+        eclair = eclair->suivant;
+    }
+}
+
+static void dessiner_hud(const t_jeu *jeu) {
+    rectfill(page, 0, jeu->sol_info, SCREEN_W, SCREEN_H, makecol(20, 20, 20));
+    line(page, 0, jeu->sol_info, SCREEN_W, jeu->sol_info, makecol(0, 255, 255));
+
+    textprintf_ex(page, font, 15, jeu->sol_info + 14, makecol(255, 255, 255), -1, "Pseudo: %s", jeu->pseudo);
+    textprintf_ex(page, font, SCREEN_W * 0.23f, jeu->sol_info + 14, makecol(0, 255, 0), -1,
+                  "Niv: %d/%d", jeu->niveau, NB_NIVEAUX);
+    textprintf_ex(page, font, SCREEN_W * 0.36f, jeu->sol_info + 14, makecol(0, 220, 255), -1,
+                  "%s", jeu->config->nom);
+    textprintf_ex(page, font, SCREEN_W * 0.55f, jeu->sol_info + 14, makecol(255, 255, 0), -1,
+                  "Score: %d", jeu->score);
+    textprintf_ex(page, font, SCREEN_W * 0.74f, jeu->sol_info + 14, makecol(255, 120, 120), -1,
+                  "Temps: %d", jeu->temps_restant);
+    textprintf_ex(page, font, SCREEN_W * 0.86f, jeu->sol_info + 14, makecol(255, 180, 0), -1,
+                  "Bulles: %d", moteur_compter_bulles(jeu));
+
+    if (jeu->joueur.bonus_tir > 0) {
+        textprintf_ex(page, font, 15, jeu->sol_info + 42, makecol(0, 255, 255), -1,
+                      "Tir rapide: %d", jeu->joueur.bonus_tir / 50 + 1);
+    }
+    if (jeu->bonus_ralenti > 0) {
+        textprintf_ex(page, font, SCREEN_W * 0.25f, jeu->sol_info + 42, makecol(90, 210, 255), -1,
+                      "Ralenti: %d", jeu->bonus_ralenti / 50 + 1);
+    }
+}
+
+int graphismes_initialiser(void) {
+    allegro_init();
+    install_keyboard();
+    install_timer();
+    set_color_depth(desktop_color_depth());
+
+    if (set_gfx_mode(GFX_AUTODETECT_WINDOWED, LARGEUR_FENETRE, HAUTEUR_FENETRE, 0, 0) != 0) {
+        allegro_message("Probleme mode graphique");
+        return 0;
+    }
+
+    page = create_bitmap(SCREEN_W, SCREEN_H);
+    if (page == NULL) {
+        allegro_message("Impossible de creer le buffer graphique");
+        return 0;
+    }
+
+    charger_images();
+    set_window_title("Super Pang - ECE");
+    return 1;
+}
+
+void graphismes_fermer(void) {
+    int i;
+
+    for (i = 1; i <= NB_NIVEAUX; i++) {
+        detruire_image(&images_bulle[i]);
+        detruire_image(&images_fond[i]);
+    }
+    for (i = 1; i <= 3; i++) {
+        detruire_image(&images_tir[i]);
+    }
+    detruire_image(&image_joueur);
+    detruire_image(&image_perso_dos);
+    detruire_image(&image_perso_face);
+    detruire_image(&image_bulle);
+    detruire_image(&image_bonus);
+    detruire_image(&image_bonus2);
+    detruire_image(&image_fond);
+    detruire_image(&image_boss);
+    detruire_image(&image_accueil);
+    detruire_image(&image_compte_rebours);
+    detruire_image(&image_victoire);
+    detruire_image(&image_defaite);
+    detruire_image(&page);
+    allegro_exit();
+}
+
+void graphismes_afficher_menu(int selection) {
+    int i;
+    dessiner_image_plein_ecran(image_accueil);
+
+    for (i = 1; i <= 3; i++) {
+        int y = 230 + (i - 1) * 45;
+        int couleur = (selection == i) ? makecol(0, 255, 255) : makecol(255, 235, 0);
+        const char *texte = (i == 1) ? "Jouer" : ((i == 2) ? "Regles" : "Quitter");
+        textout_centre_ex(page, font, texte, SCREEN_W / 2 + 1, y + 1, makecol(0, 0, 0), -1);
+        if (selection == i) textout_ex(page, font, "->", SCREEN_W / 2 - 95, y + 1, makecol(0, 0, 0), -1);
+        if (selection == i) textout_ex(page, font, "->", SCREEN_W / 2 - 95, y, couleur, -1);
+        textout_centre_ex(page, font, texte, SCREEN_W / 2, y, couleur, -1);
+    }
+
+    textout_centre_ex(page, font, "Fleches HAUT/BAS puis ENTREE", SCREEN_W / 2 + 1, SCREEN_H - 71, makecol(0, 0, 0), -1);
+    textout_centre_ex(page, font, "Fleches HAUT/BAS puis ENTREE", SCREEN_W / 2, SCREEN_H - 72, makecol(255, 235, 0), -1);
+    dessiner_signature_equipe();
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_regles(void) {
+    clear_to_color(page, makecol(10, 20, 40));
+    rectfill(page, 40, 40, SCREEN_W - 40, SCREEN_H - 40, makecol(20, 30, 60));
+    rect(page, 40, 40, SCREEN_W - 40, SCREEN_H - 40, makecol(0, 255, 255));
+
+    textout_centre_ex(page, font, "--- REGLES DU JEU ---", SCREEN_W / 2, 80, makecol(255, 255, 0), -1);
+    textout_ex(page, font, "* Fleches gauche/droite : deplacer", 95, 145, makecol(255, 255, 255), -1);
+    textout_ex(page, font, "* Espace : tirer", 95, 185, makecol(255, 255, 255), -1);
+    textout_ex(page, font, "* Les bulles se divisent en deux quand elles sont touchees", 95, 225, makecol(0, 255, 255), -1);
+    textout_ex(page, font, "* Bonus S : tir rapide    Bonus R : ralentit les dangers", 95, 265, makecol(0, 255, 120), -1);
+    textout_ex(page, font, "* Niveau 3 : boss volant qui lance des eclairs", 95, 305, makecol(255, 210, 120), -1);
+    textout_ex(page, font, "* Niveau 4 : boss qui accelere et lache des bulles", 95, 345, makecol(255, 160, 160), -1);
+    textout_centre_ex(page, font, "ENTREE : revenir au menu", SCREEN_W / 2, SCREEN_H - 90, makecol(150, 150, 150), -1);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_saisie_pseudo(const char pseudo[]) {
+    clear_to_color(page, makecol(8, 15, 30));
+    rectfill(page, 90, 130, SCREEN_W - 90, SCREEN_H - 145, makecol(20, 30, 60));
+    rect(page, 90, 130, SCREEN_W - 90, SCREEN_H - 145, makecol(0, 220, 255));
+    textout_centre_ex(page, font, "NOUVELLE PARTIE", SCREEN_W / 2, 165, makecol(255, 255, 0), -1);
+    textout_centre_ex(page, font, "Entrez votre pseudo", SCREEN_W / 2, 225, makecol(255, 255, 255), -1);
+    rectfill(page, SCREEN_W / 2 - 170, 265, SCREEN_W / 2 + 170, 305, makecol(5, 10, 20));
+    rect(page, SCREEN_W / 2 - 170, 265, SCREEN_W / 2 + 170, 305, makecol(120, 190, 255));
+    textprintf_centre_ex(page, font, SCREEN_W / 2, 280, makecol(0, 255, 255), -1, "%s_", pseudo);
+    textout_centre_ex(page, font, "ENTREE : valider    RETOUR : effacer    ECHAP : annuler",
+                      SCREEN_W / 2, 380, makecol(150, 170, 210), -1);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_reprise(const char pseudo[], int niveau, int score) {
+    clear_to_color(page, makecol(8, 15, 30));
+    rectfill(page, 70, 110, SCREEN_W - 70, SCREEN_H - 120, makecol(20, 30, 60));
+    rect(page, 70, 110, SCREEN_W - 70, SCREEN_H - 120, makecol(0, 220, 255));
+    textout_centre_ex(page, font, "SAUVEGARDE TROUVEE", SCREEN_W / 2, 165, makecol(255, 255, 0), -1);
+    textprintf_centre_ex(page, font, SCREEN_W / 2, 230, makecol(255, 255, 255), -1, "Pseudo: %s", pseudo);
+    textprintf_centre_ex(page, font, SCREEN_W / 2, 270, makecol(0, 255, 0), -1,
+                         "Niveau: %d/%d - Score: %d", niveau, NB_NIVEAUX, score);
+    textout_centre_ex(page, font, "ENTREE : reprendre    N : recommencer    ECHAP : annuler",
+                      SCREEN_W / 2, 365, makecol(150, 170, 210), -1);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_message(const char titre[], const char ligne[]) {
+    BITMAP *fond = NULL;
+
+    if (titre != NULL && strstr(titre, "VICTOIRE") != NULL) {
+        fond = image_victoire;
+    } else if (titre != NULL && strstr(titre, "PERDU") != NULL) {
+        fond = image_defaite;
+    }
+
+    if (fond != NULL) {
+        dessiner_image_plein_ecran(fond);
+    } else {
+        clear_to_color(page, makecol(0, 0, 0));
+    }
+
+    if (titre != NULL && strstr(titre, "VICTOIRE") != NULL) {
+        dessiner_texte_grand(titre, SCREEN_W / 2 + 3, SCREEN_H / 2 - 115, makecol(0, 0, 0), 7);
+        dessiner_texte_grand(titre, SCREEN_W / 2, SCREEN_H / 2 - 120, makecol(255, 235, 0), 7);
+    } else {
+        textout_centre_ex(page, font, titre, SCREEN_W / 2 + 1, SCREEN_H / 2 - 34, makecol(0, 0, 0), -1);
+        textout_centre_ex(page, font, titre, SCREEN_W / 2, SCREEN_H / 2 - 35, makecol(255, 235, 0), -1);
+    }
+    if (ligne != NULL) {
+        if (fond != NULL) {
+            textout_centre_ex(page, font, ligne, SCREEN_W / 2 + 1, SCREEN_H / 2 + 1, makecol(0, 0, 0), -1);
+        }
+        textout_centre_ex(page, font, ligne, SCREEN_W / 2, SCREEN_H / 2, makecol(255, 255, 255), -1);
+    }
+    if (fond != NULL) {
+        textout_centre_ex(page, font, "ENTREE : revenir", SCREEN_W / 2 + 1, SCREEN_H / 2 + 56, makecol(0, 0, 0), -1);
+    }
+    textout_centre_ex(page, font, "ENTREE : revenir", SCREEN_W / 2, SCREEN_H / 2 + 55, makecol(255, 235, 0), -1);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_defaite(const char ligne[]) {
+    if (image_defaite != NULL) {
+        dessiner_image_plein_ecran(image_defaite);
+    } else {
+        clear_to_color(page, makecol(35, 0, 18));
+        rectfill(page, 0, 0, SCREEN_W, SCREEN_H, makecol(20, 0, 12));
+    }
+
+    dessiner_texte_grand("DEFAITE", SCREEN_W / 2 + 3, SCREEN_H / 2 - 115, makecol(0, 0, 0), 7);
+    dessiner_texte_grand("DEFAITE", SCREEN_W / 2, SCREEN_H / 2 - 120, makecol(255, 235, 0), 7);
+
+    if (ligne != NULL) {
+        textout_centre_ex(page, font, ligne, SCREEN_W / 2 + 1, SCREEN_H / 2 + 1, makecol(0, 0, 0), -1);
+        textout_centre_ex(page, font, ligne, SCREEN_W / 2, SCREEN_H / 2, makecol(255, 255, 255), -1);
+    }
+
+    textout_centre_ex(page, font, "ENTREE : revenir", SCREEN_W / 2 + 1, SCREEN_H / 2 + 56, makecol(0, 0, 0), -1);
+    textout_centre_ex(page, font, "ENTREE : revenir", SCREEN_W / 2, SCREEN_H / 2 + 55, makecol(255, 235, 0), -1);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_compte_rebours(int valeur) {
+    static const int segments[10][7] = {
+        {1, 1, 1, 1, 1, 1, 0},
+        {0, 1, 1, 0, 0, 0, 0},
+        {1, 1, 0, 1, 1, 0, 1},
+        {1, 1, 1, 1, 0, 0, 1},
+        {0, 1, 1, 0, 0, 1, 1},
+        {1, 0, 1, 1, 0, 1, 1},
+        {1, 0, 1, 1, 1, 1, 1},
+        {1, 1, 1, 0, 0, 0, 0},
+        {1, 1, 1, 1, 1, 1, 1},
+        {1, 1, 1, 1, 0, 1, 1}
+    };
+    int w = limiter(SCREEN_W / 6, 90, 150);
+    int h = limiter(SCREEN_H / 3, 150, 220);
+    int epaisseur = limiter(w / 9, 10, 18);
+    int x = SCREEN_W / 2 - w / 2;
+    int y = SCREEN_H / 2 - h / 2;
+    int couleur = makecol(255, 235, 0);
+
+    if (valeur < 0) valeur = 0;
+    if (valeur > 9) valeur = 9;
+
+    dessiner_image_plein_ecran((image_compte_rebours != NULL) ? image_compte_rebours : image_accueil);
+    textout_centre_ex(page, font, "Prepare-toi", SCREEN_W / 2 + 1, y - 44, makecol(0, 0, 0), -1);
+    textout_centre_ex(page, font, "Prepare-toi", SCREEN_W / 2, y - 45, makecol(255, 235, 0), -1);
+
+    if (segments[valeur][0]) rectfill(page, x + epaisseur, y, x + w - epaisseur, y + epaisseur, couleur);
+    if (segments[valeur][1]) rectfill(page, x + w - epaisseur, y + epaisseur, x + w, y + h / 2, couleur);
+    if (segments[valeur][2]) rectfill(page, x + w - epaisseur, y + h / 2, x + w, y + h - epaisseur, couleur);
+    if (segments[valeur][3]) rectfill(page, x + epaisseur, y + h - epaisseur, x + w - epaisseur, y + h, couleur);
+    if (segments[valeur][4]) rectfill(page, x, y + h / 2, x + epaisseur, y + h - epaisseur, couleur);
+    if (segments[valeur][5]) rectfill(page, x, y + epaisseur, x + epaisseur, y + h / 2, couleur);
+    if (segments[valeur][6]) rectfill(page, x + epaisseur, y + h / 2 - epaisseur / 2,
+                                      x + w - epaisseur, y + h / 2 + epaisseur / 2, couleur);
+
+    dessiner_signature_equipe();
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
+
+void graphismes_afficher_jeu(const t_jeu *jeu) {
+    clear_to_color(page, makecol(0, 0, 0));
+    dessiner_fond(jeu);
+    dessiner_sol(jeu);
+    dessiner_blocs(jeu);
+    dessiner_boss_eclair(jeu);
+    dessiner_bonus(jeu);
+    dessiner_tirs(jeu);
+    dessiner_bulles(jeu);
+    dessiner_eclairs(jeu);
+    dessiner_joueur(jeu);
+    dessiner_hud(jeu);
+    blit(page, screen, 0, 0, 0, 0, SCREEN_W, SCREEN_H);
+}
